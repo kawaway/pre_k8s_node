@@ -1,0 +1,5 @@
+---
+dns_domain: example.com
+dns_server1: 192.0.2.20
+dns_server2: 192.0.2.30
+ntp_server: ntp.example.com

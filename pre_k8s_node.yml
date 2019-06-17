@@ -1,0 +1,166 @@
+---
+- hosts: all
+  tasks:
+
+# proxy for /etc/profile.d/proxy
+# proxy for /etc/apt/apt.conf.d/01proxy
+
+#  - debug: var=ansible_facts
+
+# prerequisite
+#   swapoff
+#   ssh-server installed
+
+  - name: apt sources.list for closed network install
+    blockinfile:
+      path: /etc/apt/sources.list
+      block: |
+        deb http://ftp.us.debian.org/debian/ stretch main
+        deb-src http://ftp.us.debian.org/debian/ stretch main
+
+        deb http://security.debian.org/debian-security stretch/updates main
+        deb-src http://security.debian.org/debian-security stretch/updates main
+
+        # stretch-updates, previously known as 'volatile'
+        deb http://ftp.us.debian.org/debian/ stretch-updates main
+        deb-src http://ftp.us.debian.org/debian/ stretch-updates main
+
+  - name: install sudo, debian minimal not include sudo
+    apt:
+      name: sudo
+# sshd
+  - name: security for sshd
+    replace:
+      path: /etc/ssh/sshd_config
+      regexp: ".?PermitRootLogin.*"
+      replace: "PermitRootLogin prohibit-password"
+
+  - name: get_dns
+    shell: "grep {{ dns_server1 }} /etc/resolv.conf"
+    register: get_dns
+    ignore_errors: True
+
+  - name: set dns
+    block:
+    - name: dns for permanent conf
+      blockinfile:
+        path: /etc/network/interfaces
+        block: |
+          dns-domain {{ dns_domain }}
+          dns-nameservers {{ dns_server1 }}
+          dns-nameservers {{ dns_server2 }}
+    - name: dns for current conf
+      command: /sbin/resolvconf -u
+    when: get_dns is failed
+
+  - name: install nsupdate for ddns
+    apt:
+      name: dnsutils
+# nsupdate
+# cron
+  - name: set timezone to Asia/Tokyo
+    timezone:
+      name: Asia/Tokyo
+
+  - name: install editor
+    apt:
+      name: vim
+  - name: set default editor to vim because visudo is nano
+    command: update-alternatives --set editor /usr/bin/vim.basic
+
+  - name: ntp
+    apt:
+      name: chrony
+  - name: adjust own network
+    replace:
+      path: /etc/chrony/chrony.conf
+      regexp: "2.debian.pool.ntp.org"
+      replace: "{{ ntp_server }}"
+  - systemd:
+      state: restarted
+      name: chrony
+
+  - name: enable ipv4 forwarding
+    sysctl:
+      name: net.ipv4.ip_forward
+      value: 1
+      state: present
+      sysctl_set: yes
+#
+  - name: get device list
+    shell: "ip addr | grep '^[0-9]*: ' | grep -v veth | grep -v br | grep -v lo | grep -v docker | sed -e 's/://g' | awk '{print $2}'"
+    register: device_list
+  - name: security
+    sysctl:
+      name: net.ipv4.conf.{{ item }}.rp_filter
+      value: 1
+      state: present
+      sysctl_set: yes
+    loop: "{{ device_list.stdout_lines }}"
+  - name: security
+    sysctl:
+      name: net.ipv4.conf.{{ item }}.rp_filter
+      value: 1
+      state: present
+      sysctl_set: yes
+    loop:
+      - all
+      - default 
+
+  - name: python3 for apt_reposiotry/kubespray
+    apt:
+      name: "{{ item }}"     
+    loop:
+      - python3
+      - python3-pip
+      - ca-certificates
+      - apt-transport-https
+
+  - name: apt-key virtualbox
+    apt_key:
+      url: "{{  item.url  }}" 
+      id: "{{ item.id  }}"
+    loop:
+      - { url: 'https://www.virtualbox.org/download/oracle_vbox_2016.asc', id: 'B9F8D658297AF3EFC18D5CDFA2F683C52980AECF' }
+      - { url: 'https://www.virtualbox.org/download/oracle_vbox.asc', id: '7B0FAB3A13B907435925D9C954422A4B98AB5139' }
+
+  - name: add virtualbox in sources.list
+    apt_repository:
+      repo: deb https://download.virtualbox.org/virtualbox/debian stretch contrib
+      filename: virtualbox
+      state: present
+
+  - name: virtualbox
+    apt:
+      name: "{{ item }}"
+      allow_unauthenticated: yes
+    loop:
+      - virtualbox-6.0
+        #- virtualbox-5.2
+
+  - name: vagrant
+    apt:
+      name: "{{ item }}"
+    loop:
+      - vagrant
+
+  - name: pip3 install  --install-option="--prefix=/usr/local" ansible==2.7.8 failed
+    apt:
+      name: "{{ item }}"
+    loop:
+      - libffi-dev
+
+  - name: install ansible by pip3 because kubespray require ansible 2.7.8, debian10(buster) 2.7.7
+    pip:
+      executable: pip3
+      name: "{{ item.name }}"
+      extra_args: "{{ item.extra_args }}"
+    loop:
+      - { name: 'ansible==2.7.8', extra_args:  '--install-option="--prefix=/usr/local"' } 
+     #- { name: 'ansible==2.7.8', extra_args:  '--install-option="--prefix=/usr/local"' } 
+ 
+  - name: kubespray
+    unarchive:
+      src: https://github.com/kubernetes-sigs/kubespray/archive/v2.10.3.tar.gz
+      dest: ~/
+      remote_src: yes
