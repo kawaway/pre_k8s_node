@@ -162,5 +162,6 @@
   - name: kubespray
     unarchive:
       src: https://github.com/kubernetes-sigs/kubespray/archive/v2.10.3.tar.gz
+      # I'll be fix dest
       dest: ~/
       remote_src: yes
