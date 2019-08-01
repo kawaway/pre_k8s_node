@@ -15,25 +15,60 @@
     blockinfile:
       path: /etc/apt/sources.list
       block: |
-        deb http://ftp.us.debian.org/debian/ stretch main
-        deb-src http://ftp.us.debian.org/debian/ stretch main
+        deb http://deb.debian.org/debian/ buster main
+        deb-src http://deb.debian.org/debian/ buster main
 
         deb http://security.debian.org/debian-security stretch/updates main
         deb-src http://security.debian.org/debian-security stretch/updates main
 
-        # stretch-updates, previously known as 'volatile'
-        deb http://ftp.us.debian.org/debian/ stretch-updates main
-        deb-src http://ftp.us.debian.org/debian/ stretch-updates main
+        deb http://deb.debian.org/debian/ buster-updates main
+        deb-src http://deb.debian.org/debian/ buster-updates main
 
   - name: install sudo, debian minimal not include sudo
     apt:
       name: sudo
+  - name: create or modify management user for virtualbox
+    user:
+      name:  "{{ user }}"
+      uid:   "{{ uid }}"
+      group: "{{ uid }}"
+      groups: sudo
+      create_home: True
+      shell: /bin/bash
+      generate_ssh_key: yes
+      ssh_key_type: ecdsa
+      ssh_key_bits: 256
+      ssh_key_file: .ssh/ecdsa
+      update_password: on_create
 # sshd
   - name: security for sshd
     replace:
       path: /etc/ssh/sshd_config
       regexp: ".?PermitRootLogin.*"
       replace: "PermitRootLogin prohibit-password"
+
+  - name: dhcp to static
+    replace:
+      path: /etc/network/interfaces
+      regexp: "iface {{ dev_1 }}  inet dhcp"
+      replace: "iface {{ dev_1 }} inet static"
+  - name: static address
+    blockinfile:
+      path: /etc/network/interfaces
+      insertafter: "iface {{ dev_1 }} inet static"
+      block: |
+              address {{ ipv4_1 }}
+              gateway {{ ipv4gw_1 }}
+
+  - name: set second network device
+    block:
+      - name: blockinfile
+        blockinfile:
+          path: /etc/network/interfaces
+          block: |
+            iface {{ dev_2 }} inet static
+              address {{ ipv4_2 }}
+    when: dev_2 is defined
 
   - name: get_dns
     shell: "grep {{ dns_server1 }} /etc/resolv.conf"
@@ -107,12 +142,15 @@
       - all
       - default 
 
-  - name: python3 for apt_reposiotry/kubespray
+  - name: python for apt_reposiotry/kubespray
     apt:
       name: "{{ item }}"     
     loop:
-      - python3
-      - python3-pip
+     #- python3.7
+     # - python3
+     # - python3-pip
+     #  # https://github.com/ansible/ansible/issues/47361
+     # - python3-setuptools
       - ca-certificates
       - apt-transport-https
 
@@ -130,6 +168,12 @@
       filename: virtualbox
       state: present
 
+  - name: libcurl3 for virtualbox-6.0
+    apt:
+      name: "{{ item }}"
+    loop:
+      - libcurl3
+
   - name: virtualbox
     apt:
       name: "{{ item }}"
@@ -144,24 +188,64 @@
     loop:
       - vagrant
 
-  - name: pip3 install  --install-option="--prefix=/usr/local" ansible==2.7.8 failed
+  - name: python for kubespray
     apt:
       name: "{{ item }}"
     loop:
-      - libffi-dev
+      - python
+      - python-pip
+       # https://github.com/ansible/ansible/issues/47361
+      - python-setuptools
 
   - name: install ansible by pip3 because kubespray require ansible 2.7.8, debian10(buster) 2.7.7
     pip:
-      executable: pip3
-      name: "{{ item.name }}"
-      extra_args: "{{ item.extra_args }}"
-    loop:
-      - { name: 'ansible==2.7.8', extra_args:  '--install-option="--prefix=/usr/local"' } 
-     #- { name: 'ansible==2.7.8', extra_args:  '--install-option="--prefix=/usr/local"' } 
- 
+            #executable: pip3
+      name: "virtualenv"
+    become_user: "{{ user }}"
+
+  - name: path for pip
+    blockinfile:
+      path: /home/{{ user }}/.bashrc
+      block: "export PATH=$PATH:/home{{ user }}/.local/bin"
+    become_user: "{{ user }}"
+
+  - name: venvdir
+    blockinfile:
+      path: /home/{{ user }}/.bashrc
+      block: "export VENVDIR=venv"
+    become_user: "{{ user }}"
+
+  - name: reflect PATH/VENVDIR to current shell
+    shell: . /home/{{ user }}/.bashrc
+    #become_user: "{{ user }}"
+
+  - shell: echo $PATH
+    register: result
+    become_user: "{{ user }}"
+  - debug: var=result
+
+  - name: create venvdir
+    shell: virtualenv --python=/usr/bin/python3.7 $VENVDIR
+    become_user: "{{ user }}"
+
+  - name: activate virtualenv
+    blockinfile:
+      path: /home/{{ user }}/.bashrc
+      block: ". ~/$VENVDIR/bin/activate"
+    become_user: "{{ user }}"
+
+  - name: reflect activate to current shell
+    shell: . /home/{{ user }}/$VENVDIR/bin/activate
+    become_user: "{{ user }}"
+
+
   - name: kubespray
     unarchive:
-      src: https://github.com/kubernetes-sigs/kubespray/archive/v2.10.3.tar.gz
-      # I'll be fix dest
-      dest: ~/
+      src: https://github.com/kubernetes-sigs/kubespray/archive/v{{ kubespray_version }}.tar.gz
+      dest: /home/{{ user }}
       remote_src: yes
+    become_user: "{{ user }}"
+
+  - name: create venvdir
+    shell: pip install ~/kubespray-{{ kubespray_version }}/requirements.txt
+    become_user: "{{ user }}"
